@@ -1,0 +1,13 @@
+credentials:
+  usernames:
+    Naman:
+      email: canamank42@gmail.com
+      name: Naman Khandelwal
+      password: $2b$12$KJoffPJjiqQkZGTMYqhVCuqh4nJffvMutZGzwACd5SPUjQqoVUnGi
+cookie:
+  expiry_days: 30
+  key: random_signature_key
+  name: firm_app_cookie
+preauthorized:
+  emails:
+  - m@gmail.com

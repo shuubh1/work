@@ -1,0 +1,10 @@
+streamlit
+pandas
+pdfplumber
+camelot-py[cv]
+openpyxl
+python-docx
+docxtpl
+matplotlib
+streamlit-authenticator
+pyyaml
