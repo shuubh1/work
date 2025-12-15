@@ -2,8 +2,9 @@ import streamlit as st
 import io
 import os
 import zipfile
+import pandas as pd
 from utils.auth_manager import require_auth
-from utils.doc_utils import process_word_template, generate_valuation_table_image
+from utils.doc_utils import process_word_template, extract_valuation_table_data
 
 st.set_page_config(page_title="Document Gen", page_icon="📝", layout="wide")
 
@@ -14,12 +15,47 @@ require_auth()
 st.title("Document Generation Suite")
 st.markdown("Fill in the details below to generate standard firm documents.")
 
-# --- Input Form ---
+# ==================================================
+# SECTION A: UPLOAD & PREVIEW (Interactive)
+# Moved outside form for instant feedback
+# ==================================================
+st.subheader("1. Upload Valuation Workings")
+st.info("Script looks for a **'DCF'** tab (then finds 'Financials') OR a **'NAV'** tab.")
+
+valuation_excel = st.file_uploader(
+    "Upload Excel File", 
+    type=['xlsx', 'xls'],
+    label_visibility="collapsed"
+)
+
+# Variable to hold the extracted data for later use
+table_df = None
+
+if valuation_excel:
+    with st.spinner("Scanning Excel file for tables..."):
+        # We perform extraction immediately upon upload
+        table_df = extract_valuation_table_data(valuation_excel)
+        
+    if table_df is not None:
+        st.success(f"✅ Data Found! Will generate a table with {table_df.shape[0]} rows and {table_df.shape[1]} columns.")
+        
+        # --- PREVIEWER ---
+        with st.expander("👁️ Preview Table Data (Click to Expand)", expanded=True):
+            st.caption("This is the exact data that will be inserted into the Word document.")
+            st.dataframe(table_df, use_container_width=True)
+    else:
+        st.error("❌ Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in this file.")
+
+st.divider()
+
+# ==================================================
+# SECTION B: DOCUMENT DETAILS FORM
+# ==================================================
 with st.form("doc_gen_form"):
-    st.subheader("1. General Information")
+    st.subheader("2. Document Details")
+    
     col1, col2 = st.columns(2)
     with col1:
-        # New Date Logic
         st.markdown("**Date Details**")
         val_date = st.date_input("Valuation Date (Mgmt Rep Letter)", key="d1")
         br_date = st.date_input("Board Resolution Date", key="d2")
@@ -32,7 +68,7 @@ with st.form("doc_gen_form"):
         
     st.divider()
     
-    st.subheader("2. Addressee Details")
+    st.subheader("3. Addressee Details")
     col_a, col_b = st.columns(2)
     with col_a:
         authority = st.text_input("Addressee Name (Authority)", "Mr. John Doe")
@@ -41,7 +77,7 @@ with st.form("doc_gen_form"):
         addressed_to = st.text_input("Salutation (e.g. Sir/Ma'am)", "Sir")
         group_designation = st.text_input("Group Designation (e.g. Board of Directors)", "Board of Directors")
 
-    st.subheader("3. Address Details")
+    st.subheader("4. Address Details")
     address1 = st.text_input("Address Line 1", "123 Business Park")
     col3, col4 = st.columns(2)
     with col3:
@@ -49,14 +85,6 @@ with st.form("doc_gen_form"):
     with col4:
         address3 = st.text_input("Address Line 3", "New York, NY 10001")
             
-    st.subheader("4. Specifics & Uploads")
-    # Changed from Image Upload to Excel Upload
-    valuation_excel = st.file_uploader(
-        "Upload Valuation Workings (Excel) for <<valuation.jpg>>", 
-        type=['xlsx', 'xls'],
-        help="Script looks for 'DCF' (uses 'Financials' sheet) or 'NAV' (uses that sheet) to create the table image."
-    )
-
     st.subheader("5. Select Documents to Generate")
     doc_opts = {
         "Board Resolution": "Board Resolution.docx",
@@ -67,6 +95,9 @@ with st.form("doc_gen_form"):
 
     submitted = st.form_submit_button("Generate Documents", type="primary")
 
+# ==================================================
+# SECTION C: PROCESSING
+# ==================================================
 if submitted:
     if not selected_docs:
         st.error("Please select at least one document to generate.")
@@ -74,7 +105,7 @@ if submitted:
 
     full_address = f"{address1}, {address2}, {address3}"
     
-    # Base Context (Global variables)
+    # Base Context
     base_context = {
         "<<company>>": company,
         "<<company_caps>>": company.upper(),
@@ -89,7 +120,6 @@ if submitted:
         "<<address3>>": address3,
         "<<group_designation>>": group_designation,
         "<<authority_designation>>": designation,
-        # New explicit keys if user updates templates
         "<<valuation_date>>": val_date.strftime("%d-%b-%Y"),
         "<<br_date>>": br_date.strftime("%d-%b-%Y"),
         "<<engagement_date>>": eng_date.strftime("%d-%b-%Y"),
@@ -100,13 +130,11 @@ if submitted:
         st.error(f"Error: '{template_dir}' folder not found.")
         st.stop()
 
-    # Generate Image from Excel (Once)
-    img_stream = None
-    if valuation_excel:
-        with st.spinner("Extracting table from Excel..."):
-            img_stream = generate_valuation_table_image(valuation_excel)
-            if img_stream is None:
-                st.warning("Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in the uploaded Excel. <<valuation.jpg>> will be empty.")
+    # NOTE: We use 'table_df' here, which was extracted in Section A (outside the form)
+    # This is efficient because we don't need to re-read the Excel file.
+    if valuation_excel and table_df is None:
+        # If file was uploaded but df is None, it means extraction failed silently or previously
+        st.warning("Warning: Excel file provided but no table data was extracted. The table in the document will be empty.")
 
     generated_files = []
 
@@ -119,8 +147,7 @@ if submitted:
                 st.error(f"Template not found: {filename}")
                 continue
             
-            # --- Dynamic Context Switching for Dates ---
-            # This logic ensures the old <<date>> tag gets the RIGHT date based on the document type
+            # Context Switching Logic for Dates
             current_context = base_context.copy()
             
             if doc_name == "Management Rep Letter":
@@ -128,14 +155,13 @@ if submitted:
             elif doc_name == "Board Resolution":
                 current_context["<<date>>"] = base_context["<<br_date>>"]
             elif doc_name == "Engagement Letter":
-                # Handles potential typo in your template <<date >>
                 current_context["<<date>>"] = base_context["<<engagement_date>>"]
                 current_context["<<date >>"] = base_context["<<engagement_date>>"]
             else:
-                current_context["<<date>>"] = base_context["<<valuation_date>>"] # Default
+                current_context["<<date>>"] = base_context["<<valuation_date>>"] 
             
-            # Process Document
-            doc = process_word_template(file_path, current_context, img_stream)
+            # Process Document (Passing DataFrame now)
+            doc = process_word_template(file_path, current_context, table_df)
             
             doc_io = io.BytesIO()
             doc.save(doc_io)
