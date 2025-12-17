@@ -2,9 +2,8 @@ import streamlit as st
 import io
 import os
 import zipfile
-import pandas as pd
 from utils.auth_manager import require_auth
-from utils.doc_utils import process_word_template, extract_valuation_table_data, generate_financial_table_image
+from utils.doc_utils import process_word_template
 
 st.set_page_config(page_title="Document Gen", page_icon="📝", layout="wide")
 
@@ -14,53 +13,31 @@ require_auth()
 
 st.title("Document Generation Suite")
 st.markdown("### 1. Valuation Table Input")
-st.info("💡 **Pro Tip:** You can copy your Excel table (using Snipping Tool or 'Copy as Picture') and **press Ctrl+V** directly into the uploader below.")
+st.info("Please upload the screenshot/image of your valuation table.")
 
 # ==================================================
-# SECTION A: DYNAMIC INPUT (Paste Image OR Upload Excel)
+# SECTION A: MANUAL IMAGE UPLOAD ONLY
 # ==================================================
 col_input, col_preview = st.columns([1, 1])
 
-# Global variables to store the final assets
-final_table_df = None
-final_image_buffer = None
+uploaded_image_buffer = None
 
 with col_input:
-    # We use a single uploader that accepts images AND excel
     uploaded_file = st.file_uploader(
-        "Paste Image (Ctrl+V) or Upload File", 
-        type=['png', 'jpg', 'jpeg', 'xlsx', 'xls'],
-        help="Click here and press Ctrl+V to paste an image from your clipboard, or drag and drop a file."
+        "Upload Table Image", 
+        type=['png', 'jpg', 'jpeg'],
+        help="Upload the exact image you want to appear in the document."
     )
 
     if uploaded_file:
-        file_type = uploaded_file.type
-        
-        # CASE 1: IMAGE (User pasted or uploaded a screenshot)
-        if "image" in file_type:
-            final_image_buffer = uploaded_file
-            st.success("✅ Image captured!")
-
-        # CASE 2: EXCEL (User uploaded raw data)
-        elif "spreadsheet" in file_type or "excel" in file_type:
-            with st.spinner("Extracting table from Excel..."):
-                final_table_df = extract_valuation_table_data(uploaded_file)
-                if final_table_df is not None:
-                    st.success(f"✅ Extracted table: {final_table_df.shape[0]} rows x {final_table_df.shape[1]} cols")
-                else:
-                    st.error("❌ No valid 'Financials' or 'NAV' sheet found.")
+        uploaded_image_buffer = uploaded_file
+        st.success("✅ Image uploaded successfully!")
 
 with col_preview:
-    # Show preview based on what we have
-    if final_image_buffer:
-        st.image(final_image_buffer, caption="Preview: This image will be used in the document", use_column_width=True)
-    elif final_table_df is not None:
-        st.caption("Preview: Auto-generated table image from Excel")
-        # Generate a preview image on the fly
-        preview_img = generate_financial_table_image(final_table_df)
-        st.image(preview_img, use_column_width=True)
+    if uploaded_image_buffer:
+        st.image(uploaded_image_buffer, caption="Preview: This image will be inserted", use_column_width=True)
     else:
-        st.info("No content detected yet. Waiting for paste or upload...")
+        st.info("Waiting for image upload...")
 
 st.divider()
 
@@ -119,9 +96,8 @@ if submitted:
         st.error("Please select at least one document to generate.")
         st.stop()
     
-    # Validation: Do we have *something* to put in the table?
-    if final_image_buffer is None and final_table_df is None:
-        st.warning("⚠️ No table data provided (Image or Excel). The `<<valuation.jpg>>` section will be empty.")
+    if uploaded_image_buffer is None:
+        st.warning("⚠️ No image uploaded. The `<<valuation.jpg>>` section in the document will be empty.")
 
     full_address = f"{address1}, {address2}, {address3}"
     
@@ -175,12 +151,10 @@ if submitted:
                 current_context["<<date>>"] = base_context["<<valuation_date>>"] 
             
             # Process Document
-            # We pass BOTH. Logic inside doc_utils decides priority (Image > DF).
             doc = process_word_template(
                 file_path, 
                 current_context, 
-                table_data=final_table_df, 
-                provided_image_stream=final_image_buffer
+                provided_image_stream=uploaded_image_buffer
             )
             
             doc_io = io.BytesIO()
