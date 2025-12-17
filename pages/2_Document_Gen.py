@@ -16,40 +16,59 @@ st.title("Document Generation Suite")
 st.markdown("Fill in the details below to generate standard firm documents.")
 
 # ==================================================
-# SECTION A: UPLOAD & PREVIEW (Interactive)
-# Moved outside form for instant feedback
+# SECTION A: PROVIDE TABLE DATA
 # ==================================================
-st.subheader("1. Upload Valuation Workings")
-st.info("Script looks for a **'DCF'** tab (then finds 'Financials') OR a **'NAV'** tab.")
+st.subheader("1. Provide Valuation Table")
 
-valuation_excel = st.file_uploader(
-    "Upload Excel File", 
-    type=['xlsx', 'xls'],
-    label_visibility="collapsed"
+# Toggle between Manual Image or Excel Auto-Gen
+input_method = st.radio(
+    "Select Table Source:",
+    ["Upload Image (Recommended)", "Upload Excel (Auto-Generate)"],
+    horizontal=True
 )
 
-# Variable to hold the extracted data for later use
+# Variables to hold the final assets
 table_df = None
+uploaded_image_buffer = None
 
-if valuation_excel:
-    with st.spinner("Scanning Excel file and generating preview..."):
-        # We perform extraction immediately upon upload
-        table_df = extract_valuation_table_data(valuation_excel)
-        
-    if table_df is not None:
-        st.success(f"✅ Data Found! Will generate a table with {table_df.shape[0]} rows and {table_df.shape[1]} columns.")
-        
-        # --- PREVIEWER ---
-        with st.expander("👁️ Preview Generated Image (Click to Expand)", expanded=True):
-            st.caption("This is the exact image that will be pasted into the Word document.")
+if input_method == "Upload Image (Recommended)":
+    st.info("💡 **Tip:** In Excel, select your table > Copy as Picture > Save as Image (or Paste here if supported). This guarantees the exact formatting.")
+    
+    uploaded_image = st.file_uploader(
+        "Upload Table Screenshot", 
+        type=['png', 'jpg', 'jpeg'],
+        help="Upload a screenshot or saved image of your Excel table."
+    )
+    
+    if uploaded_image:
+        uploaded_image_buffer = uploaded_image
+        with st.expander("👁️ Preview Uploaded Image", expanded=True):
+            st.image(uploaded_image, caption="This image will be inserted into the document.", use_column_width=False)
+
+else:
+    # --- OLD EXCEL METHOD ---
+    st.info("Script looks for a **'DCF'** tab (then finds 'Financials') OR a **'NAV'** tab.")
+    
+    valuation_excel = st.file_uploader(
+        "Upload Excel File", 
+        type=['xlsx', 'xls'],
+        label_visibility="collapsed"
+    )
+
+    if valuation_excel:
+        with st.spinner("Scanning Excel file and generating preview..."):
+            table_df = extract_valuation_table_data(valuation_excel)
             
-            # Generate the image buffer just for preview
-            img_buffer = generate_financial_table_image(table_df)
-            st.image(img_buffer, caption="Table Preview", use_column_width=False)
+        if table_df is not None:
+            st.success(f"✅ Data Found! Will generate a table with {table_df.shape[0]} rows and {table_df.shape[1]} columns.")
             
-            # Reset pointer not needed for buffer, but good practice if we re-use logic
-    else:
-        st.error("❌ Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in this file.")
+            with st.expander("👁️ Preview Generated Image (Click to Expand)", expanded=True):
+                st.caption("This is the image generated from your Excel data.")
+                # Generate the image buffer just for preview
+                img_buffer = generate_financial_table_image(table_df)
+                st.image(img_buffer, caption="Table Preview", use_column_width=False)
+        else:
+            st.error("❌ Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in this file.")
 
 st.divider()
 
@@ -135,11 +154,12 @@ if submitted:
         st.error(f"Error: '{template_dir}' folder not found.")
         st.stop()
 
-    # NOTE: We use 'table_df' here, which was extracted in Section A (outside the form)
-    # This is efficient because we don't need to re-read the Excel file.
-    if valuation_excel and table_df is None:
-        # If file was uploaded but df is None, it means extraction failed silently or previously
-        st.warning("Warning: Excel file provided but no table data was extracted. The table in the document will be empty.")
+    # NOTE: Validation Check
+    # If Excel mode was chosen but no DF found, OR Image mode chosen but no Image found
+    if input_method == "Upload Excel (Auto-Generate)" and table_df is None:
+        st.warning("⚠️ Warning: Excel method selected but no table data was extracted. Document table will be empty.")
+    elif input_method == "Upload Image (Recommended)" and uploaded_image_buffer is None:
+        st.warning("⚠️ Warning: Image method selected but no image uploaded. Document table will be empty.")
 
     generated_files = []
 
@@ -165,9 +185,19 @@ if submitted:
             else:
                 current_context["<<date>>"] = base_context["<<valuation_date>>"] 
             
-            # Process Document (Passing DataFrame now)
-            # The doc_utils.process_word_template will handle generating the image from the DF
-            doc = process_word_template(file_path, current_context, table_df)
+            # Process Document 
+            # We pass BOTH possible sources. The function decides which to use based on what is not None.
+            # We ensure we only pass the one corresponding to the user's choice.
+            
+            df_to_pass = table_df if input_method == "Upload Excel (Auto-Generate)" else None
+            img_to_pass = uploaded_image_buffer if input_method == "Upload Image (Recommended)" else None
+            
+            doc = process_word_template(
+                file_path, 
+                current_context, 
+                table_data=df_to_pass, 
+                provided_image_stream=img_to_pass
+            )
             
             doc_io = io.BytesIO()
             doc.save(doc_io)

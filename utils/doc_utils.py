@@ -126,8 +126,6 @@ def generate_financial_table_image(df):
 
             if is_number:
                  cell.set_text_props(ha='right')
-                 # Add some right padding by prepending a space if needed, 
-                 # but matplotlib handles padding via rcParams usually.
             else:
                  cell.set_text_props(ha='left')
 
@@ -144,27 +142,36 @@ def generate_financial_table_image(df):
     
     return buf
 
-def process_word_template(template_path, context, table_data=None):
+def process_word_template(template_path, context, table_data=None, provided_image_stream=None):
     """
-    Opens a Word template, replaces placeholders, and inserts the table as an IMAGE.
+    Opens a Word template, replaces placeholders.
+    Inserts a table image from EITHER:
+    1. 'provided_image_stream' (Direct user upload)
+    2. 'table_data' (Auto-generated from DataFrame)
     """
     doc = Document(template_path)
     
-    # Pre-generate image if table data exists
-    image_stream = None
-    if table_data is not None:
-        image_stream = generate_financial_table_image(table_data)
+    # Determine which image source to use
+    final_image_stream = None
+    
+    if provided_image_stream is not None:
+        # Use the manually uploaded image
+        final_image_stream = provided_image_stream
+    elif table_data is not None:
+        # Generate the image from the dataframe
+        final_image_stream = generate_financial_table_image(table_data)
 
     # 1. Iterate through all paragraphs
     paragraphs = list(doc.paragraphs)
     
     for p in paragraphs:
         # --- Table Image Insertion Logic ---
-        if '<<valuation.jpg>>' in p.text and image_stream is not None:
+        if '<<valuation.jpg>>' in p.text and final_image_stream is not None:
             p.text = "" # Clear the placeholder text
             run = p.add_run()
             # Add picture with a set width (e.g., 6 inches to fit standard page margins)
-            run.add_picture(image_stream, width=Inches(6.0))
+            # You can adjust width=Inches(6.0) if you want it larger/smaller
+            run.add_picture(final_image_stream, width=Inches(6.0))
             continue
 
         # --- Standard Text Replacement ---
