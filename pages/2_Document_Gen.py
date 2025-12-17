@@ -4,7 +4,7 @@ import os
 import zipfile
 import pandas as pd
 from utils.auth_manager import require_auth
-from utils.doc_utils import process_word_template, extract_valuation_table_data
+from utils.doc_utils import process_word_template, extract_valuation_table_data, generate_financial_table_image
 
 st.set_page_config(page_title="Document Gen", page_icon="📝", layout="wide")
 
@@ -32,7 +32,7 @@ valuation_excel = st.file_uploader(
 table_df = None
 
 if valuation_excel:
-    with st.spinner("Scanning Excel file for tables..."):
+    with st.spinner("Scanning Excel file and generating preview..."):
         # We perform extraction immediately upon upload
         table_df = extract_valuation_table_data(valuation_excel)
         
@@ -40,9 +40,14 @@ if valuation_excel:
         st.success(f"✅ Data Found! Will generate a table with {table_df.shape[0]} rows and {table_df.shape[1]} columns.")
         
         # --- PREVIEWER ---
-        with st.expander("👁️ Preview Table Data (Click to Expand)", expanded=True):
-            st.caption("This is the exact data that will be inserted into the Word document.")
-            st.dataframe(table_df, use_container_width=True)
+        with st.expander("👁️ Preview Generated Image (Click to Expand)", expanded=True):
+            st.caption("This is the exact image that will be pasted into the Word document.")
+            
+            # Generate the image buffer just for preview
+            img_buffer = generate_financial_table_image(table_df)
+            st.image(img_buffer, caption="Table Preview", use_column_width=False)
+            
+            # Reset pointer not needed for buffer, but good practice if we re-use logic
     else:
         st.error("❌ Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in this file.")
 
@@ -161,6 +166,7 @@ if submitted:
                 current_context["<<date>>"] = base_context["<<valuation_date>>"] 
             
             # Process Document (Passing DataFrame now)
+            # The doc_utils.process_word_template will handle generating the image from the DF
             doc = process_word_template(file_path, current_context, table_df)
             
             doc_io = io.BytesIO()

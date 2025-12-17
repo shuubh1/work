@@ -1,9 +1,9 @@
 from docx import Document
 from docx.shared import Inches, Pt
-from docx.oxml.ns import qn
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 import pandas as pd
 import io
+import matplotlib.pyplot as plt
+from pandas.plotting import table
 
 def clean_and_trim_df(df):
     """
@@ -64,86 +64,107 @@ def extract_valuation_table_data(excel_file):
         print(f"Error extracting table data: {e}")
         return None
 
-def create_word_table(doc, df):
+def generate_financial_table_image(df):
     """
-    Creates a native Word table from a dataframe matching the grid structure.
+    Converts a dataframe into a high-quality 'Financial Report' style image buffer.
+    Matches the 'Snapshot' look: Bold headers, clean lines, whitespace.
     """
-    # Add a table with exact dataframe dimensions (no extra header row)
-    table = doc.add_table(rows=df.shape[0], cols=df.shape[1])
-    
-    # Apply a standard grid style (borders)
-    table.style = 'Table Grid'
-    
-    # Loop through the grid
-    for i in range(df.shape[0]):
-        row = table.rows[i]
-        
-        # Allow row to break across pages (Fixes the "Gap" issue)
-        tr = row._tr
-        tr.get_or_add_trPr()
-        # In XML, usually not setting 'cantSplit' allows splitting. 
-        # We leave it default which usually allows break unless 'Keep with next' is active.
-        
-        for j in range(df.shape[1]):
-            val = df.iloc[i, j]
-            cell = row.cells[j]
-            
-            # Insert text
-            cell_text = str(val) if pd.notna(val) and str(val) != "" else ""
-            
-            # If the text is a float ending in .0, make it an int string
-            if cell_text.endswith(".0"):
-                 try:
-                     cell_text = str(int(float(cell_text)))
-                 except:
-                     pass
-                     
-            cell.text = cell_text
-            
-            # --- Styling for Professional Look ---
-            for paragraph in cell.paragraphs:
-                # Set font size to 9pt (Financial standard) to fit more data
-                for run in paragraph.runs:
-                    run.font.size = Pt(9)
-                    run.font.name = 'Arial'
-                
-                # Center align usually looks best for data tables
-                # But if it's the first column (Descriptions), align Left
-                if j == 0:
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                else:
-                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                
-    return table
+    # Clean data: Replace NaN with empty strings
+    df = df.fillna('')
 
-def move_table_after(table, paragraph):
-    """
-    Moves a table element to be immediately after a specific paragraph.
-    """
-    tbl, p = table._tbl, paragraph._p
-    p.addnext(tbl)
+    # Dynamic sizing: width based on cols, height based on rows
+    # We estimate dimensions to ensure text doesn't wrap awkwardly
+    w = max(len(df.columns) * 2.0, 8) 
+    h = max((len(df) + 1) * 0.4, 3)
+    
+    fig, ax = plt.subplots(figsize=(w, h))
+    ax.axis('off') # Hide the graph axes
+
+    # Create the table
+    # loc='center' centers it in the figure
+    tbl = table(ax, df, loc='center', cellLoc='center', colWidths=[1.0/len(df.columns)] * len(df.columns))
+
+    # Apply "Financial Report" Styling
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(11)
+    tbl.scale(1.2, 1.5) # Scale width, height
+
+    # Iterate over cells to apply specific styles
+    for (row, col), cell in tbl.get_celld().items():
+        cell.set_edgecolor('white') # Default to invisible borders
+        cell.set_linewidth(0)
+        
+        # --- HEADERS (Row 0) ---
+        if row == 0:
+            cell.set_text_props(weight='bold', color='black')
+            cell.set_facecolor('white')
+            # Thick bottom border for header
+            cell.set_edgecolor('black') 
+            cell.set_linewidth(1.5)
+            cell.visible_edges = "B" 
+        
+        # --- DATA ROWS ---
+        else:
+            cell.set_facecolor('white')
+            cell.set_text_props(color='#333333')
+            
+            # Align logic: Attempt to right-align numbers
+            val = df.iloc[row-1, col]
+            
+            # Simple heuristic for numbers vs text
+            is_number = False
+            try:
+                if isinstance(val, (int, float)):
+                    is_number = True
+                elif isinstance(val, str):
+                    # Clean chars to check if it's a number like "$50,000" or "(500)"
+                    clean_val = val.replace('$', '').replace('%', '').replace(',', '').replace('(', '').replace(')', '').strip()
+                    if clean_val and clean_val.replace('.', '', 1).isdigit():
+                        is_number = True
+            except:
+                is_number = False
+
+            if is_number:
+                 cell.set_text_props(ha='right')
+                 # Add some right padding by prepending a space if needed, 
+                 # but matplotlib handles padding via rcParams usually.
+            else:
+                 cell.set_text_props(ha='left')
+
+            # Thin bottom border for rows
+            cell.set_edgecolor('#e0e0e0')
+            cell.set_linewidth(0.5)
+            cell.visible_edges = "B"
+
+    # Save to Buffer
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight', dpi=300, pad_inches=0.1)
+    buf.seek(0)
+    plt.close(fig) # Close plot to free memory
+    
+    return buf
 
 def process_word_template(template_path, context, table_data=None):
     """
-    Opens a Word template, replaces placeholders, and inserts a NATIVE TABLE
-    if table_data (DataFrame) is provided.
+    Opens a Word template, replaces placeholders, and inserts the table as an IMAGE.
     """
     doc = Document(template_path)
     
+    # Pre-generate image if table data exists
+    image_stream = None
+    if table_data is not None:
+        image_stream = generate_financial_table_image(table_data)
+
     # 1. Iterate through all paragraphs
-    # We collect paragraphs first to avoid modifying the list while iterating
     paragraphs = list(doc.paragraphs)
     
     for p in paragraphs:
-        # --- Table Insertion Logic ---
-        if '<<valuation.jpg>>' in p.text and table_data is not None:
+        # --- Table Image Insertion Logic ---
+        if '<<valuation.jpg>>' in p.text and image_stream is not None:
             p.text = "" # Clear the placeholder text
-            
-            # Create a new table
-            new_table = create_word_table(doc, table_data)
-            
-            # Move it to right after this paragraph
-            move_table_after(new_table, p)
+            run = p.add_run()
+            # Add picture with a set width (e.g., 6 inches to fit standard page margins)
+            run.add_picture(image_stream, width=Inches(6.0))
             continue
 
         # --- Standard Text Replacement ---
