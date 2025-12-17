@@ -27,7 +27,7 @@ def clean_and_trim_df(df):
 def extract_valuation_table_data(excel_file):
     """
     Analyzes an Excel file (DCF/NAV), extracts the table data as a DataFrame.
-    Returns: pandas.DataFrame or None
+    IMPORTANT: Reads with header=None to preserve exact grid layout.
     """
     try:
         xls = pd.ExcelFile(excel_file)
@@ -40,13 +40,14 @@ def extract_valuation_table_data(excel_file):
         dcf_sheets = [s for s in sheet_names if 'DCF' in s.upper()]
         if dcf_sheets:
             if 'Financials' in sheet_names:
-                target_df = pd.read_excel(xls, 'Financials')
+                # Read without header to keep the exact look (title, spacers, etc)
+                target_df = pd.read_excel(xls, 'Financials', header=None)
             
         # 2. Check for NAV (Fallback)
         if target_df is None:
             nav_sheets = [s for s in sheet_names if 'NAV' in s.upper()]
             if nav_sheets:
-                target_df = pd.read_excel(xls, nav_sheets[0])
+                target_df = pd.read_excel(xls, nav_sheets[0], header=None)
 
         if target_df is None:
             return None
@@ -65,41 +66,59 @@ def extract_valuation_table_data(excel_file):
 
 def create_word_table(doc, df):
     """
-    Creates a native Word table from a dataframe.
+    Creates a native Word table from a dataframe matching the grid structure.
     """
-    # Add a table with rows+1 (for header)
-    table = doc.add_table(rows=df.shape[0] + 1, cols=df.shape[1])
+    # Add a table with exact dataframe dimensions (no extra header row)
+    table = doc.add_table(rows=df.shape[0], cols=df.shape[1])
     
     # Apply a standard grid style (borders)
     table.style = 'Table Grid'
-
-    # --- Header ---
-    for j, col_name in enumerate(df.columns):
-        cell = table.cell(0, j)
-        cell.text = str(col_name)
-        # Bold the header
-        for paragraph in cell.paragraphs:
-            for run in paragraph.runs:
-                run.font.bold = True
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    # --- Body ---
-    for i, row in enumerate(df.itertuples(index=False)):
-        for j, val in enumerate(row):
-            cell = table.cell(i + 1, j)
-            # Format numbers slightly? 
-            # For now, just string conversion
-            cell.text = str(val)
-            # Center align cells for neatness
+    
+    # Loop through the grid
+    for i in range(df.shape[0]):
+        row = table.rows[i]
+        
+        # Allow row to break across pages (Fixes the "Gap" issue)
+        tr = row._tr
+        tr.get_or_add_trPr()
+        # In XML, usually not setting 'cantSplit' allows splitting. 
+        # We leave it default which usually allows break unless 'Keep with next' is active.
+        
+        for j in range(df.shape[1]):
+            val = df.iloc[i, j]
+            cell = row.cells[j]
+            
+            # Insert text
+            cell_text = str(val) if pd.notna(val) and str(val) != "" else ""
+            
+            # If the text is a float ending in .0, make it an int string
+            if cell_text.endswith(".0"):
+                 try:
+                     cell_text = str(int(float(cell_text)))
+                 except:
+                     pass
+                     
+            cell.text = cell_text
+            
+            # --- Styling for Professional Look ---
             for paragraph in cell.paragraphs:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                # Set font size to 9pt (Financial standard) to fit more data
+                for run in paragraph.runs:
+                    run.font.size = Pt(9)
+                    run.font.name = 'Arial'
+                
+                # Center align usually looks best for data tables
+                # But if it's the first column (Descriptions), align Left
+                if j == 0:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                else:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 
     return table
 
 def move_table_after(table, paragraph):
     """
     Moves a table element to be immediately after a specific paragraph.
-    This is required because python-docx adds tables to the end of the doc by default.
     """
     tbl, p = table._tbl, paragraph._p
     p.addnext(tbl)
@@ -120,7 +139,7 @@ def process_word_template(template_path, context, table_data=None):
         if '<<valuation.jpg>>' in p.text and table_data is not None:
             p.text = "" # Clear the placeholder text
             
-            # Create a new table (initially at the end of doc)
+            # Create a new table
             new_table = create_word_table(doc, table_data)
             
             # Move it to right after this paragraph
