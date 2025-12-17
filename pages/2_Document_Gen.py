@@ -13,62 +13,54 @@ require_auth()
 # ----------------------------
 
 st.title("Document Generation Suite")
-st.markdown("Fill in the details below to generate standard firm documents.")
+st.markdown("### 1. Valuation Table Input")
+st.info("💡 **Pro Tip:** You can copy your Excel table (using Snipping Tool or 'Copy as Picture') and **press Ctrl+V** directly into the uploader below.")
 
 # ==================================================
-# SECTION A: PROVIDE TABLE DATA
+# SECTION A: DYNAMIC INPUT (Paste Image OR Upload Excel)
 # ==================================================
-st.subheader("1. Provide Valuation Table")
+col_input, col_preview = st.columns([1, 1])
 
-# Toggle between Manual Image or Excel Auto-Gen
-input_method = st.radio(
-    "Select Table Source:",
-    ["Upload Image (Recommended)", "Upload Excel (Auto-Generate)"],
-    horizontal=True
-)
+# Global variables to store the final assets
+final_table_df = None
+final_image_buffer = None
 
-# Variables to hold the final assets
-table_df = None
-uploaded_image_buffer = None
-
-if input_method == "Upload Image (Recommended)":
-    st.info("💡 **Tip:** In Excel, select your table > Copy as Picture > Save as Image (or Paste here if supported). This guarantees the exact formatting.")
-    
-    uploaded_image = st.file_uploader(
-        "Upload Table Screenshot", 
-        type=['png', 'jpg', 'jpeg'],
-        help="Upload a screenshot or saved image of your Excel table."
-    )
-    
-    if uploaded_image:
-        uploaded_image_buffer = uploaded_image
-        with st.expander("👁️ Preview Uploaded Image", expanded=True):
-            st.image(uploaded_image, caption="This image will be inserted into the document.", use_column_width=False)
-
-else:
-    # --- OLD EXCEL METHOD ---
-    st.info("Script looks for a **'DCF'** tab (then finds 'Financials') OR a **'NAV'** tab.")
-    
-    valuation_excel = st.file_uploader(
-        "Upload Excel File", 
-        type=['xlsx', 'xls'],
-        label_visibility="collapsed"
+with col_input:
+    # We use a single uploader that accepts images AND excel
+    uploaded_file = st.file_uploader(
+        "Paste Image (Ctrl+V) or Upload File", 
+        type=['png', 'jpg', 'jpeg', 'xlsx', 'xls'],
+        help="Click here and press Ctrl+V to paste an image from your clipboard, or drag and drop a file."
     )
 
-    if valuation_excel:
-        with st.spinner("Scanning Excel file and generating preview..."):
-            table_df = extract_valuation_table_data(valuation_excel)
-            
-        if table_df is not None:
-            st.success(f"✅ Data Found! Will generate a table with {table_df.shape[0]} rows and {table_df.shape[1]} columns.")
-            
-            with st.expander("👁️ Preview Generated Image (Click to Expand)", expanded=True):
-                st.caption("This is the image generated from your Excel data.")
-                # Generate the image buffer just for preview
-                img_buffer = generate_financial_table_image(table_df)
-                st.image(img_buffer, caption="Table Preview", use_column_width=False)
-        else:
-            st.error("❌ Could not find a valid 'DCF' (Financials sheet) or 'NAV' sheet in this file.")
+    if uploaded_file:
+        file_type = uploaded_file.type
+        
+        # CASE 1: IMAGE (User pasted or uploaded a screenshot)
+        if "image" in file_type:
+            final_image_buffer = uploaded_file
+            st.success("✅ Image captured!")
+
+        # CASE 2: EXCEL (User uploaded raw data)
+        elif "spreadsheet" in file_type or "excel" in file_type:
+            with st.spinner("Extracting table from Excel..."):
+                final_table_df = extract_valuation_table_data(uploaded_file)
+                if final_table_df is not None:
+                    st.success(f"✅ Extracted table: {final_table_df.shape[0]} rows x {final_table_df.shape[1]} cols")
+                else:
+                    st.error("❌ No valid 'Financials' or 'NAV' sheet found.")
+
+with col_preview:
+    # Show preview based on what we have
+    if final_image_buffer:
+        st.image(final_image_buffer, caption="Preview: This image will be used in the document", use_column_width=True)
+    elif final_table_df is not None:
+        st.caption("Preview: Auto-generated table image from Excel")
+        # Generate a preview image on the fly
+        preview_img = generate_financial_table_image(final_table_df)
+        st.image(preview_img, use_column_width=True)
+    else:
+        st.info("No content detected yet. Waiting for paste or upload...")
 
 st.divider()
 
@@ -126,6 +118,10 @@ if submitted:
     if not selected_docs:
         st.error("Please select at least one document to generate.")
         st.stop()
+    
+    # Validation: Do we have *something* to put in the table?
+    if final_image_buffer is None and final_table_df is None:
+        st.warning("⚠️ No table data provided (Image or Excel). The `<<valuation.jpg>>` section will be empty.")
 
     full_address = f"{address1}, {address2}, {address3}"
     
@@ -154,13 +150,6 @@ if submitted:
         st.error(f"Error: '{template_dir}' folder not found.")
         st.stop()
 
-    # NOTE: Validation Check
-    # If Excel mode was chosen but no DF found, OR Image mode chosen but no Image found
-    if input_method == "Upload Excel (Auto-Generate)" and table_df is None:
-        st.warning("⚠️ Warning: Excel method selected but no table data was extracted. Document table will be empty.")
-    elif input_method == "Upload Image (Recommended)" and uploaded_image_buffer is None:
-        st.warning("⚠️ Warning: Image method selected but no image uploaded. Document table will be empty.")
-
     generated_files = []
 
     try:
@@ -185,18 +174,13 @@ if submitted:
             else:
                 current_context["<<date>>"] = base_context["<<valuation_date>>"] 
             
-            # Process Document 
-            # We pass BOTH possible sources. The function decides which to use based on what is not None.
-            # We ensure we only pass the one corresponding to the user's choice.
-            
-            df_to_pass = table_df if input_method == "Upload Excel (Auto-Generate)" else None
-            img_to_pass = uploaded_image_buffer if input_method == "Upload Image (Recommended)" else None
-            
+            # Process Document
+            # We pass BOTH. Logic inside doc_utils decides priority (Image > DF).
             doc = process_word_template(
                 file_path, 
                 current_context, 
-                table_data=df_to_pass, 
-                provided_image_stream=img_to_pass
+                table_data=final_table_df, 
+                provided_image_stream=final_image_buffer
             )
             
             doc_io = io.BytesIO()
